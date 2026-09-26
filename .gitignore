@@ -1,0 +1,4 @@
+.orchestrator/
+
+# Cortex runtime state (memory + RAG index, regenerable)
+.cortex/

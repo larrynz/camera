@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.larry.webcam",
+  "name": "Webcam",
+  "version": "1.0.0",
+  "author": "larry",
+  "license": "MIT",
+  "description": "Webcam hub — camera controls, stills, recordings, and a virtual camera for conferencing.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Widget.qml"
+  },
+  "barWidget": {
+    "displayName": "Webcam",
+    "description": "Webcam hub — camera controls, stills, recordings, and a virtual camera for conferencing.",
+    "category": "Media",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}

@@ -1,0 +1,33 @@
+Driver Info:
+	Driver name      : uvcvideo
+	Card type        : Integrated Camera: Integrated C
+	Bus info         : usb-0000:06:00.3-3
+	Driver version   : 7.2.5
+	Capabilities     : 0x84a00001
+		Video Capture
+		Metadata Capture
+		Streaming
+		Extended Pix Format
+		Device Capabilities
+	Device Caps      : 0x04200001
+		Video Capture
+		Streaming
+		Extended Pix Format
+Media Driver Info:
+	Driver name      : uvcvideo
+	Model            : Integrated Camera: Integrated C
+	Serial           : 
+	Bus info         : usb-0000:06:00.3-3
+	Media version    : 7.2.5
+	Hardware revision: 0x00001919 (6425)
+	Driver version   : 7.2.5
+Interface Info:
+	ID               : 0x03000002
+	Type             : V4L Video
+Entity Info:
+	ID               : 0x00000001 (1)
+	Name             : Integrated Camera: Integrated C
+	Function         : V4L2 I/O
+	Flags            : default
+	Pad 0x01000007   : 0: Sink
+	  Link 0x02000010: from remote pad 0x100000a of entity 'Extension 3' (Video Pixel Formatter): Data, Enabled, Immutable
