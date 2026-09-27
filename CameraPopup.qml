@@ -73,6 +73,7 @@ PopupWindow {
   signal takePhotoRequested()
   signal photoStateChange(bool busy, string message)
   signal recordToggleRequested()
+  signal captureOptionChanged(string key, string value)
   signal mirrorChangeRequested(bool enabled)
 
   readonly property bool loopbackReady: root.loopbackLoaded && root.loopbackMain != null && !!root.loopbackMain.node
@@ -400,6 +401,44 @@ PopupWindow {
       font.pixelSize: 10
       color: root.safeMuted
       text: cs.disabledHint
+    }
+  }
+
+  // Wrapping option flow — like ButtonGroup but wraps onto multiple rows so
+  // long device lists (microphones) stay fully visible in the panel.
+  component MicOptionFlow: Flow {
+    id: flow
+
+    property var options: []
+    property string value: ""
+    property color foreground: Color.foreground
+    property color background: Color.background
+    property color accent: Color.accent
+    property string fontFamily: Style.font.family
+    property real fontSize: Style.font.body
+
+    signal changed(string value)
+
+    spacing: Style.spacing.sm
+
+    Repeater {
+      model: flow.options
+
+      delegate: Button {
+        required property var modelData
+
+        readonly property string optValue: (modelData && modelData.value !== undefined) ? String(modelData.value) : String(modelData)
+
+        text: (modelData && modelData.label !== undefined) ? String(modelData.label) : String(modelData)
+        selected: optValue === flow.value
+        bordered: true
+        foreground: flow.foreground
+        background: flow.background
+        accent: flow.accent
+        fontFamily: flow.fontFamily
+        fontSize: flow.fontSize
+        onClicked: flow.changed(optValue)
+      }
     }
   }
 
@@ -812,20 +851,6 @@ PopupWindow {
               visible: root.viewfinderState === "disconnected"
               onClicked: root.refreshRequested()
             }
-
-            Button {
-              anchors.horizontalCenter: parent.horizontalCenter
-              text: "Start virtual camera"
-              bordered: true
-              foreground: root.fg
-              background: root.bg
-              accent: root.accent
-              fontFamily: root.fontFamily
-              fontSize: 11
-              visible: root.viewfinderState === "off"
-              enabled: root.loopbackLoaded && !root.permissionDenied
-              onClicked: root.virtualCamToggleRequested()
-            }
           }
 
           // Capture actions
@@ -875,6 +900,56 @@ PopupWindow {
         }
       }
 
+      // Virtual camera status — below the viewfinder, not buried in settings
+      Text {
+        id: hubStatus
+        width: parent.width
+        wrapMode: Text.Wrap
+        font.family: root.fontFamily
+        font.pixelSize: 10
+        color: root.hubState === "running" ? root.fg : (root.hubState === "error" ? root.urgent : root.safeMuted)
+        text: root.hubStatusText
+      }
+
+      // Loopback setup help — below the viewfinder when the driver is missing
+      Column {
+        id: loopbackHelp
+        width: parent.width
+        spacing: 6
+        visible: !root.loopbackLoaded
+
+        Text {
+          width: parent.width
+          wrapMode: Text.Wrap
+          color: root.safeMuted
+          font.family: root.fontFamily
+          font.pixelSize: 10
+          text: root.loopbackInstalled
+            ? 'Load the virtual camera driver (once per boot):\n\nsudo modprobe v4l2loopback video_nr=8,9 card_label="Virtual Camera","Capture Helper" exclusive_caps=1'
+            : 'Install the v4l2loopback kernel module (e.g. v4l2loopback-dkms), then load it:\n\nsudo modprobe v4l2loopback video_nr=8,9 card_label="Virtual Camera","Capture Helper" exclusive_caps=1'
+        }
+
+        Text {
+          width: parent.width
+          wrapMode: Text.Wrap
+          color: root.safeMuted
+          font.family: root.fontFamily
+          font.pixelSize: 10
+          text: 'To keep it across reboots: add "v4l2loopback" to /etc/modules-load.d/ and the options line to /etc/modprobe.d/.'
+        }
+
+        Button {
+          text: "Re-check"
+          bordered: true
+          foreground: root.fg
+          background: root.bg
+          accent: root.accent
+          fontFamily: root.fontFamily
+          fontSize: 11
+          onClicked: root.recheckRequested()
+        }
+      }
+
       Text {
         id: statusText
         width: parent.width
@@ -907,9 +982,11 @@ PopupWindow {
           - headerSep.height
           - previewFrame.height
           - (cameraSelector.visible ? cameraSelector.implicitHeight : 0)
+          - (hubStatus.height)
+          - (loopbackHelp.visible ? loopbackHelp.height : 0)
           - (statusText.visible ? statusText.height : 0)
           - (mirrorToggle.visible ? mirrorToggle.height : 0)
-          - mainCol.spacing * (3 + (cameraSelector.visible ? 1 : 0) + (statusText.visible ? 1 : 0) + (mirrorToggle.visible ? 1 : 0)))
+          - mainCol.spacing * (3 + (cameraSelector.visible ? 1 : 0) + 1 + (loopbackHelp.visible ? 1 : 0) + (statusText.visible ? 1 : 0) + (mirrorToggle.visible ? 1 : 0)))
         contentWidth: width
         contentHeight: sectionsCol.implicitHeight
         clip: true
@@ -951,26 +1028,38 @@ PopupWindow {
               label: "Photo format"
               options: ["JPEG", "PNG"]
               value: root.photoFormat === "png" ? "PNG" : "JPEG"
-              onChanged: function(v) { root.photoFormat = (v === "PNG") ? "png" : "jpg" }
+              onChanged: function(v) {
+                root.photoFormat = (v === "PNG") ? "png" : "jpg"
+                root.captureOptionChanged("photoFormat", root.photoFormat)
+              }
             }
 
             CameraToggle {
               label: "Raw camera feed (ignore mirror)"
               checked: root.rawPhoto
-              onToggled: root.rawPhoto = !root.rawPhoto
+              onToggled: {
+                root.rawPhoto = !root.rawPhoto
+                root.captureOptionChanged("rawPhoto", String(root.rawPhoto))
+              }
             }
 
             CameraSegmented {
               label: "Recording format"
               options: ["MP4", "MKV"]
               value: root.recFormat === "mkv" ? "MKV" : "MP4"
-              onChanged: function(v) { root.recFormat = (v === "MKV") ? "mkv" : "mp4" }
+              onChanged: function(v) {
+                root.recFormat = (v === "MKV") ? "mkv" : "mp4"
+                root.captureOptionChanged("recFormat", root.recFormat)
+              }
             }
 
             CameraToggle {
               label: "Microphone in recordings"
               checked: root.micOn
-              onToggled: root.micOn = !root.micOn
+              onToggled: {
+                root.micOn = !root.micOn
+                root.captureOptionChanged("micOn", String(root.micOn))
+              }
             }
 
             Column {
@@ -988,7 +1077,7 @@ PopupWindow {
                 font.bold: true
               }
 
-              ButtonGroup {
+              MicOptionFlow {
                 options: root.micPickerOptions
                 value: root.micSource
                 foreground: root.fg
@@ -996,132 +1085,61 @@ PopupWindow {
                 accent: root.accent
                 fontFamily: root.fontFamily
                 fontSize: 11
-                onChanged: function(v) { root.micSource = v }
+                onChanged: function(v) {
+                  root.micSource = v
+                  root.captureOptionChanged("micSource", v)
+                }
               }
             }
-          }
 
-          // Virtual camera hub
-          Column {
-            width: parent.width
-            spacing: 10
-
-            PanelSectionHeader {
-              text: "VIRTUAL CAMERA"
-              foreground: root.fg
-              fontFamily: root.fontFamily
-            }
-
-            Text {
-              width: parent.width
-              wrapMode: Text.Wrap
-              text: root.hubStatusText
-              color: root.hubState === "running" ? root.fg : (root.hubState === "error" ? root.urgent : root.safeMuted)
-              font.family: root.fontFamily
-              font.pixelSize: 10
-            }
-
+            // Capture mode: resolution and frame rate (when formats are known)
             Column {
               width: parent.width
-              spacing: 6
-              visible: !root.loopbackLoaded
+              spacing: 10
+              visible: root.captureFormats && root.captureFormats.length > 0
+
+              CameraSegmented {
+                label: "Resolution"
+                options: Model.resolutionOptions(root.captureFormats, root.captureMode)
+                value: (root.captureMode && root.captureMode.width !== undefined && root.captureMode.height !== undefined)
+                  ? (root.captureMode.width + "x" + root.captureMode.height)
+                  : ""
+                onChanged: function(val) {
+                  var parts = val.split("x")
+                  if (parts.length !== 2) return
+                  var w = parseInt(parts[0], 10)
+                  var h = parseInt(parts[1], 10)
+                  var curFps = (root.captureMode && root.captureMode.fps !== undefined) ? root.captureMode.fps : 30
+                  var picked = Model.pickCaptureMode(root.captureFormats, root.captureMode, w, h, curFps)
+                  if (picked) {
+                    root.captureModeRequested(picked.width, picked.height, picked.fps)
+                  }
+                }
+              }
+
+              CameraSegmented {
+                label: "Frame rate (fps)"
+                options: (root.captureMode && root.captureMode.width !== undefined)
+                  ? Model.fpsOptions(root.captureFormats, root.captureMode.width, root.captureMode.height, root.captureMode.pixelformat, root.captureMode.fps)
+                  : []
+                value: (root.captureMode && root.captureMode.fps !== undefined) ? String(root.captureMode.fps) : ""
+                onChanged: function(val) {
+                  if (!root.captureMode || root.captureMode.width === undefined) return
+                  var picked = Model.pickCaptureMode(root.captureFormats, root.captureMode, root.captureMode.width, root.captureMode.height, parseFloat(val))
+                  if (picked) {
+                    root.captureModeRequested(picked.width, picked.height, picked.fps)
+                  }
+                }
+              }
 
               Text {
                 width: parent.width
                 wrapMode: Text.Wrap
-                color: root.safeMuted
                 font.family: root.fontFamily
                 font.pixelSize: 10
-                text: root.loopbackInstalled
-                  ? 'Load the virtual camera driver (once per boot):\n\nsudo modprobe v4l2loopback video_nr=8,9 card_label="Virtual Camera","Capture Helper" exclusive_caps=1'
-                  : 'Install the v4l2loopback kernel module (e.g. v4l2loopback-dkms), then load it:\n\nsudo modprobe v4l2loopback video_nr=8,9 card_label="Virtual Camera","Capture Helper" exclusive_caps=1'
-              }
-
-              Text {
-                width: parent.width
-                wrapMode: Text.Wrap
                 color: root.safeMuted
-                font.family: root.fontFamily
-                font.pixelSize: 10
-                text: 'To keep it across reboots: add "v4l2loopback" to /etc/modules-load.d/ and the options line to /etc/modprobe.d/.'
+                text: "Default mode for apps that don't choose their own. Changing it restarts the virtual camera."
               }
-
-              Button {
-                text: "Re-check"
-                bordered: true
-                foreground: root.fg
-                background: root.bg
-                accent: root.accent
-                fontFamily: root.fontFamily
-                fontSize: 11
-                onClicked: root.recheckRequested()
-              }
-            }
-
-            PanelSeparator {
-              foreground: root.fg
-            }
-          }
-
-          // Capture mode
-          Column {
-            width: parent.width
-            spacing: 10
-            visible: root.captureFormats && root.captureFormats.length > 0
-
-            PanelSectionHeader {
-              text: "CAPTURE"
-              foreground: root.fg
-              fontFamily: root.fontFamily
-            }
-
-            CameraSegmented {
-              label: "Resolution"
-              options: Model.resolutionOptions(root.captureFormats, root.captureMode)
-              value: (root.captureMode && root.captureMode.width !== undefined && root.captureMode.height !== undefined)
-                ? (root.captureMode.width + "x" + root.captureMode.height)
-                : ""
-              onChanged: function(val) {
-                var parts = val.split("x")
-                if (parts.length !== 2) return
-                var w = parseInt(parts[0], 10)
-                var h = parseInt(parts[1], 10)
-                var curFps = (root.captureMode && root.captureMode.fps !== undefined) ? root.captureMode.fps : 30
-                var picked = Model.pickCaptureMode(root.captureFormats, root.captureMode, w, h, curFps)
-                if (picked) {
-                  root.captureModeRequested(picked.width, picked.height, picked.fps)
-                }
-              }
-            }
-
-            CameraSegmented {
-              label: "Frame rate (fps)"
-              options: (root.captureMode && root.captureMode.width !== undefined)
-                ? Model.fpsOptions(root.captureFormats, root.captureMode.width, root.captureMode.height, root.captureMode.pixelformat, root.captureMode.fps)
-                : []
-              value: (root.captureMode && root.captureMode.fps !== undefined) ? String(root.captureMode.fps) : ""
-              onChanged: function(val) {
-                if (!root.captureMode || root.captureMode.width === undefined) return
-                var picked = Model.pickCaptureMode(root.captureFormats, root.captureMode, root.captureMode.width, root.captureMode.height, parseFloat(val))
-                if (picked) {
-                  root.captureModeRequested(picked.width, picked.height, picked.fps)
-                }
-              }
-            }
-
-            Text {
-              width: parent.width
-              wrapMode: Text.Wrap
-              font.family: root.fontFamily
-              font.pixelSize: 10
-              color: root.captureBusy ? root.urgent : root.safeMuted
-              text: root.captureBusy
-                ? "Camera is in use — close the app using it and try again."
-                : "Default mode for apps that don't choose their own. Changing it restarts the virtual camera."
-            }
-
-            PanelSeparator {
-              foreground: root.fg
             }
           }
 

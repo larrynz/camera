@@ -20,7 +20,7 @@ Item {
   id: root
 
   property var bar
-  property string moduleName: "io.github.larry.webcam"
+  property string moduleName: "io.github.larrynz.webcam"
   property var settings
 
   readonly property bool vertical: bar ? bar.vertical : false
@@ -82,6 +82,16 @@ Item {
   property string lastCaptureMessage: ""
   property bool mirrorPreview: false
 
+  // Persisted user state (survives shell restarts via the state file)
+  property bool rawPhoto: false
+  property string photoFormat: "jpg"
+  property string recFormat: "mp4"
+  property bool micOn: false
+  property string micSource: ""
+  property bool hubEnabled: false
+  property bool stateLoaded: false
+  property string pendingDevice: ""
+
   // =========================================================================
   // Popup interactions
   // =========================================================================
@@ -110,6 +120,81 @@ Item {
   // Discovery
   // =========================================================================
 
+  // =========================================================================
+  // Persisted state (~/.local/state/io.github.larrynz.webcam.json)
+  // =========================================================================
+
+  FileView {
+    id: stateFile
+    path: Quickshell.env("HOME") + "/.local/state/io.github.larrynz.webcam.json"
+    atomicWrites: true
+    printErrors: false
+    onLoaded: root.loadState(text())
+    onLoadFailed: function(error) { root.loadState("") }
+  }
+
+  function loadState(text) {
+    var s = null
+    try { s = JSON.parse(String(text || "{}")) } catch (e) { s = null }
+    if (!s || typeof s !== "object") s = {}
+    if (s.mirrorPreview !== undefined) root.mirrorPreview = !!s.mirrorPreview
+    if (s.rawPhoto !== undefined) root.rawPhoto = !!s.rawPhoto
+    if (s.photoFormat === "png" || s.photoFormat === "jpg") root.photoFormat = s.photoFormat
+    if (s.recFormat === "mp4" || s.recFormat === "mkv") root.recFormat = s.recFormat
+    if (s.micOn !== undefined) root.micOn = !!s.micOn
+    if (typeof s.micSource === "string") root.micSource = s.micSource
+    if (typeof s.device === "string" && s.device !== "") root.pendingDevice = s.device
+    if (s.hubEnabled !== undefined) root.hubEnabled = !!s.hubEnabled
+    root.stateLoaded = true
+    root.applyPersistedDevice()
+    root.maybeAutoStartHub()
+  }
+
+  function applyPersistedDevice() {
+    if (root.pendingDevice === "") return
+    var want = root.pendingDevice
+    root.pendingDevice = ""
+    if (root.cameras.length === 0) {
+      // cameras not discovered yet — keep the wish; applyCameras honors it
+      root.pendingDevice = want
+      return
+    }
+    var found = false
+    for (var i = 0; i < root.cameras.length; i++) {
+      if (root.cameras[i].captureNode === want) { found = true; break }
+    }
+    if (found) {
+      if (root.device !== want) root.switchTo(root.cameras[i])
+    } else {
+      // persisted camera no longer present — fall back to the first
+      if (root.device !== root.cameras[0].captureNode) root.switchTo(root.cameras[0])
+    }
+  }
+
+  function saveState() {
+    var s = {
+      mirrorPreview: root.mirrorPreview,
+      rawPhoto: root.rawPhoto,
+      photoFormat: root.photoFormat,
+      recFormat: root.recFormat,
+      micOn: root.micOn,
+      micSource: root.micSource,
+      device: root.device,
+      hubEnabled: root.hubEnabled
+    }
+    stateFile.setText(JSON.stringify(s, null, 2) + "\n")
+  }
+
+  // Auto-start the hub when the persisted switch says on and the system is
+  // ready (covers shell restarts; the self-healing start clears orphans).
+  function maybeAutoStartHub() {
+    if (!root.stateLoaded || !root.hubEnabled) return
+    if (hubProc.running) return
+    if (!root.loopbackReady()) return
+    if (!root.devicePresent || root.permissionDenied) return
+    root.startHub()
+  }
+
   function refresh() {
     if (!listDevicesProc.running) listDevicesProc.running = true
     if (!detectCameractrlsProc.running) detectCameractrlsProc.running = true
@@ -131,7 +216,16 @@ Item {
         break
       }
     }
+    if (!selected && root.pendingDevice !== "") {
+      for (var j = 0; j < root.cameras.length; j++) {
+        if (root.cameras[j].captureNode === root.pendingDevice) {
+          selected = root.cameras[j]
+          break
+        }
+      }
+    }
     if (!selected && root.cameras.length > 0) selected = root.cameras[0]
+    if (selected && root.pendingDevice === selected.captureNode) root.pendingDevice = ""
 
     if (!selected) {
       root.listGeneration++
@@ -189,6 +283,9 @@ Item {
     root.userSelectedMode = false
     root.preferredModeAttempted = false
     root.startDeviceCheck()
+    // Persist the last-used camera, but never before the saved state has
+    // loaded (a startup discovery must not overwrite it with defaults).
+    if (root.stateLoaded) root.saveState()
   }
 
   function startDeviceCheck() {
@@ -327,6 +424,14 @@ Item {
         options: root.fovControl ? root.fovControl.options : undefined
       }
     }
+    // Reset persisted popup settings too — everything back to factory state.
+    root.mirrorPreview = false
+    root.rawPhoto = false
+    root.photoFormat = "jpg"
+    root.recFormat = "mp4"
+    root.micOn = false
+    root.micSource = ""
+    root.saveState()
   }
 
   // =========================================================================
@@ -455,9 +560,27 @@ Item {
     hubStopWatchdog.restart() // SIGKILL fallback
   }
 
+  function applyCaptureOption(key, value) {
+    if (key === "mirrorPreview") root.mirrorPreview = (value === "true" || value === true)
+    else if (key === "rawPhoto") root.rawPhoto = (value === "true" || value === true)
+    else if (key === "photoFormat") root.photoFormat = (value === "png") ? "png" : "jpg"
+    else if (key === "recFormat") root.recFormat = (value === "mkv") ? "mkv" : "mp4"
+    else if (key === "micOn") root.micOn = (value === "true" || value === true)
+    else if (key === "micSource") root.micSource = String(value || "")
+    else return
+    root.saveState()
+  }
+
   function toggleHub() {
-    if (root.hubActive()) root.stopHub()
-    else root.startHub()
+    if (root.hubActive()) {
+      root.hubEnabled = false
+      root.stopHub()
+      root.saveState()
+    } else {
+      root.hubEnabled = true
+      root.saveState()
+      root.startHub()
+    }
   }
 
   // Restart after a capture-mode change or device switch, once the new state
@@ -567,6 +690,7 @@ Item {
     var flag = Model.parseFlag(enabled)
     if (flag === null) return
     root.mirrorPreview = flag
+    root.saveState()
   }
 
   // =========================================================================
@@ -614,7 +738,7 @@ Item {
   // =========================================================================
 
   IpcHandler {
-    target: "io.github.larry.webcam"
+    target: "io.github.larrynz.webcam"
 
     function open() { root.open() }
     function close() { root.close() }
@@ -1090,6 +1214,12 @@ Item {
     photoBusy: root.photoBusy
     lastCaptureMessage: root.lastCaptureMessage
     mirrorPreview: root.mirrorPreview
+    rawPhoto: root.rawPhoto
+    photoFormat: root.photoFormat
+    recFormat: root.recFormat
+    micOn: root.micOn
+    micSource: root.micSource
+    onCaptureOptionChanged: function(key, value) { root.applyCaptureOption(key, value) }
     onDeviceChangeRequested: function(path) { root.setDevice(path) }
     onRecheckRequested: {
       root.probeDone = false
@@ -1105,7 +1235,7 @@ Item {
     onRecordToggleRequested: root.recording
       ? root.stopRecording()
       : root.startRecording(popup.recFormat, popup.micOn ? popup.micSource : "")
-    onMirrorChangeRequested: function(enabled) { root.mirrorPreview = enabled }
+    onMirrorChangeRequested: function(enabled) { root.mirrorPreview = enabled; root.saveState() }
     onRefreshRequested: root.refresh()
     onControlChanged: function(name, val) { root.setControl(name, val) }
     onCaptureModeRequested: function(w, h, fps) { root.setCaptureMode(w, h, fps) }
@@ -1114,4 +1244,7 @@ Item {
   }
 
   Component.onCompleted: root.refresh()
+
+  onDevicePresentChanged: root.maybeAutoStartHub()
+  onLoopbackLoadedChanged: root.maybeAutoStartHub()
 }

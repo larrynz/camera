@@ -1,4 +1,4 @@
-# io.github.larry.webcam
+# io.github.larrynz.webcam
 
 Native `omarchy-shell` bar widget and settings popup that turns any Linux V4L2/UVC camera into a full webcam hub: hardware-driven camera controls, still photos, video recording, and a **virtual camera** your conferencing apps can use — all from the Omarchy bar.
 
@@ -21,14 +21,15 @@ The plugin wraps `v4l2-ctl`, `ffmpeg`, and (optionally) `cameractrls`. Nothing i
 
 ## Features
 
-- **Virtual Camera**: a button in the viewfinder row shows **Off** while the camera runs (red accent) and **Start Virtual Camera** when it's off; right-clicking the bar icon or IPC does the same. The bar icon turns accent-colored while it runs.
-- **Photos & Recordings**: `Photo` saves to `~/Pictures/webcam-<timestamp>.jpg` (or `.png`) — either the on-screen frame as you see it (mirroring applied) or the raw camera feed, per the popup's Photo format setting; `Record` writes H.264 MP4 to `~/Videos/webcam-<timestamp>.mp4` with a live REC timer. Stopping a recording sends SIGINT so ffmpeg finalizes the file properly (a watchdog escalates if it hangs). Both read from the hub when it's running (helper loopback), otherwise straight from the camera.
+- **Virtual Camera**: a button in the viewfinder row shows **Off** while the camera runs (red accent) and **Start Virtual Camera** when it's off; right-clicking the bar icon or IPC does the same. The bar icon turns accent-colored while it runs. Its status (`Running → /dev/video8`, starting, failed, or driver setup help) renders directly below the viewfinder — not buried in the settings list.
+- **Photos & Recordings**: `Photo` saves to `~/Pictures/webcam-<timestamp>.jpg` (or `.png`) — either the on-screen frame as you see it (mirroring applied) or the raw camera feed, per the popup's Photo format setting; `Record` writes H.264 MP4 (or MKV) to `~/Videos/webcam-<timestamp>.mp4` with a live REC timer, optionally with microphone audio — the **Microphone in recordings** toggle plus a device picker that wraps onto multiple rows so every mic fits. Stopping a recording sends SIGINT so ffmpeg finalizes the file properly (a watchdog escalates if it hangs). Both read from the hub when it's running (helper loopback), otherwise straight from the camera.
 - **Live Viewfinder**: while the virtual camera runs and the popup is open, a true live video stream (QtMultimedia `CaptureSession`) renders from the helper loopback. The **Mirror** toggle flips the preview only — the stream other apps receive is never mirrored, so mirror ON matches a conferencing app's self-view.
 - **Dynamic Settings**: every slider, toggle, and segmented control is generated from what the device reports — real min/max/step, real defaults, menu labels from the driver (e.g. *Manual Mode* / *Aperture Priority Mode*). Controls are grouped into Optics, Exposure, Color, and Utilities; anything unrecognized lands in **Advanced** and still works. Un-settable types (e.g. region-of-interest `rect`/`bitmask` controls on some laptops) are hidden rather than rendered broken.
 - **Dependency-Aware Controls**: manual sliders (focus, exposure time, color temperature) disable themselves while their parent auto mode is on, using each control's reported inactive flag and known dependency pairs.
 - **Multi-Camera**: a picker appears when more than one capture device is discovered; switching restarts the hub on the new camera.
+- **Persistent Settings**: mirror, photo/recording format, microphone choice, last-used camera, and the virtual-camera switch all survive shell restarts via a small state file in `~/.local/state/`. Logging back in with the virtual camera enabled auto-starts the hub (self-healing cleanup runs first).
 - **Capture Mode**: default resolution / frame rate for apps that don't negotiate their own, applied via `v4l2-ctl --set-fmt-video`/`--set-parm`. Mode changes automatically stop and restart the hub.
-- **Hardware-Aware Reset**: "Reset defaults" restores every control the camera reports a default for, in dependency-safe phase order, plus the vendor FOV when available.
+- **Hardware-Aware Reset**: "Reset defaults" restores every control the camera reports a default for, in dependency-safe phase order, plus the vendor FOV when available, and clears the persisted popup settings (mirror, microphone choice, photo/recording formats) back to factory state.
 - **Full IPC**: scripts and keybindings can toggle the virtual camera, shoot photos, start/stop recordings, and read/write any control (see below).
 
 ## Prerequisites
@@ -52,7 +53,7 @@ The virtual camera needs the v4l2loopback driver loaded. Load it (root) with the
 sudo modprobe v4l2loopback video_nr=8,9 card_label="Virtual Camera","Capture Helper" exclusive_caps=1
 ```
 
-`video_nr` picks the `/dev/videoN` nodes; `exclusive_caps=1` is required for Chrome/Firefox/Chromium-based apps to list the device. The popup shows this command verbatim whenever the driver is not loaded, with a **Re-check** button after you run it.
+`video_nr` picks the `/dev/videoN` nodes; `exclusive_caps=1` is required for Chrome/Firefox/Chromium-based apps to list the device. The popup shows this command verbatim below the viewfinder whenever the driver is not loaded, with a **Re-check** button after you run it.
 
 To persist across reboots:
 
@@ -66,23 +67,23 @@ Nodes 8/9 are a convention, not a requirement — the plugin discovers whatever 
 ## Installation
 
 ```bash
-omarchy plugin add https://github.com/larry/webcam.git --enable
+omarchy plugin add https://github.com/larrynz/camera.git --enable
 ```
 
 ### Development (local checkout)
 
 ```bash
-git clone https://github.com/larry/webcam.git
-ln -sfn "$PWD/webcam" ~/.config/omarchy/plugins/io.github.larry.webcam
+git clone https://github.com/larrynz/camera.git
+ln -sfn "$PWD/camera" ~/.config/omarchy/plugins/io.github.larrynz.webcam
 ```
 
 ## Uninstall / Remove
 
 ```bash
-omarchy plugin remove io.github.larry.webcam
+omarchy plugin remove io.github.larrynz.webcam
 ```
 
-Removal leaves nothing behind: the plugin is stateless and writes no configuration or cache. Photos and recordings you took are ordinary files in `~/Pictures` and `~/Videos`.
+Uninstalling is clean: the plugin writes exactly one file of its own — a small state file (`~/.local/state/io.github.larrynz.webcam.json`) holding your toggles and settings. Remove the plugin directory and the state file and nothing else remains. Photos and recordings you took are ordinary files in `~/Pictures` and `~/Videos`.
 
 ## Capture Mode Notes
 
@@ -92,48 +93,48 @@ Removal leaves nothing behind: the plugin is stateless and writes no configurati
 
 ## IPC Interface Contract
 
-Target `io.github.larry.webcam`, invoked via `omarchy-shell`:
+Target `io.github.larrynz.webcam`, invoked via `omarchy-shell`:
 
 ```bash
 # Popup
-omarchy-shell io.github.larry.webcam open
-omarchy-shell io.github.larry.webcam close
-omarchy-shell io.github.larry.webcam toggle
+omarchy-shell io.github.larrynz.webcam open
+omarchy-shell io.github.larrynz.webcam close
+omarchy-shell io.github.larrynz.webcam toggle
 
 # Virtual camera
-omarchy-shell io.github.larry.webcam virtualCam on        # start; prints 1 on success
-omarchy-shell io.github.larry.webcam virtualCam off       # stop
-omarchy-shell io.github.larry.webcam virtualCam toggle   # prints new state
-omarchy-shell io.github.larry.webcam virtualCamStatus
+omarchy-shell io.github.larrynz.webcam virtualCam on        # start; prints 1 on success
+omarchy-shell io.github.larrynz.webcam virtualCam off       # stop
+omarchy-shell io.github.larrynz.webcam virtualCam toggle   # prints new state
+omarchy-shell io.github.larrynz.webcam virtualCamStatus
 # Output: off | starting | running | error
 
 # Capture
-omarchy-shell io.github.larry.webcam takePhoto           # prints the saved path
-omarchy-shell io.github.larry.webcam startRecording [format] [mic]  # prints the target path; format mp4|mkv, mic 0|1
-omarchy-shell io.github.larry.webcam stopRecording
+omarchy-shell io.github.larrynz.webcam takePhoto           # prints the saved path
+omarchy-shell io.github.larrynz.webcam startRecording [format] [mic]  # prints the target path; format mp4|mkv, mic 0|1
+omarchy-shell io.github.larrynz.webcam stopRecording
 
 # Cameras
-omarchy-shell io.github.larry.webcam listCameras
-# Output: [{"index":0,"path":"/dev/video0","name":"Integrated Camera"}]
-omarchy-shell io.github.larry.webcam selectCamera 0
-omarchy-shell io.github.larry.webcam getDevice           # active capture node
-omarchy-shell io.github.larry.webcam setDevice /dev/video0
-omarchy-shell io.github.larry.webcam listDevices         # legacy alias: [{path,name}]
+omarchy-shell io.github.larrynz.webcam listCameras
+# Output: [{"index":0,"path":"/dev/video0","name":"Integrated Camera: Integrated C"}]
+omarchy-shell io.github.larrynz.webcam selectCamera 0
+omarchy-shell io.github.larrynz.webcam getDevice           # active capture node
+omarchy-shell io.github.larrynz.webcam setDevice /dev/video0
+omarchy-shell io.github.larrynz.webcam listDevices         # legacy alias: [{path,name}]
 
 # Controls (only what the active camera exposes)
-omarchy-shell io.github.larry.webcam getCtrl brightness
-omarchy-shell io.github.larry.webcam setCtrl brightness 150
-omarchy-shell io.github.larry.webcam setCtrl logitech_brio_fov 78   # needs cameractrls
-omarchy-shell io.github.larry.webcam resetDefaults
+omarchy-shell io.github.larrynz.webcam getCtrl brightness
+omarchy-shell io.github.larrynz.webcam setCtrl brightness 150
+omarchy-shell io.github.larrynz.webcam setCtrl logitech_brio_fov 78   # needs cameractrls
+omarchy-shell io.github.larrynz.webcam resetDefaults
 
 # Capture mode
-omarchy-shell io.github.larry.webcam getCaptureMode
+omarchy-shell io.github.larrynz.webcam getCaptureMode
 # Output: 1280x720@30 MJPG
-omarchy-shell io.github.larry.webcam setCaptureMode 1920x1080 30
+omarchy-shell io.github.larrynz.webcam setCaptureMode 1920x1080 30
 
 # Mirror (popup preview flip)
-omarchy-shell io.github.larry.webcam getMirror            # 0 | 1
-omarchy-shell io.github.larry.webcam setMirror 1
+omarchy-shell io.github.larrynz.webcam getMirror            # 0 | 1
+omarchy-shell io.github.larrynz.webcam setMirror 1
 ```
 
 ### Legacy preview commands
@@ -141,10 +142,10 @@ omarchy-shell io.github.larry.webcam setMirror 1
 The old in-popup Qt preview was replaced by the hub; these commands remain for existing scripts and now map onto the virtual camera:
 
 ```bash
-omarchy-shell io.github.larry.webcam getPreview
+omarchy-shell io.github.larrynz.webcam getPreview
 # active | busy | inactive | disconnected | permission
-omarchy-shell io.github.larry.webcam setPreviewActive 1   # starts the virtual camera
-omarchy-shell io.github.larry.webcam setPreviewActive 0   # stops it
+omarchy-shell io.github.larrynz.webcam setPreviewActive 1   # starts the virtual camera
+omarchy-shell io.github.larrynz.webcam setPreviewActive 0   # stops it
 ```
 
 ## White balance note
