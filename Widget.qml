@@ -89,6 +89,7 @@ Item {
   property bool micOn: false
   property string micSource: ""
   property bool hubEnabled: false
+  property bool orphanCleanupDone: false
   property bool stateLoaded: false
   property string pendingDevice: ""
 
@@ -188,10 +189,24 @@ Item {
   // Auto-start the hub when the persisted switch says on and the system is
   // ready (covers shell restarts; the self-healing start clears orphans).
   function maybeAutoStartHub() {
-    if (!root.stateLoaded || !root.hubEnabled) return
+    if (!root.stateLoaded) return
     if (hubProc.running) return
     if (!root.loopbackReady()) return
     if (!root.devicePresent || root.permissionDenied) return
+    if (!root.hubEnabled) {
+      // Hub disabled, but a crashed shell leaves an orphaned hub ffmpeg
+      // still holding the camera (LED on while the app reports off).
+      // Clear it once so the app and hardware agree.
+      if (!root.orphanCleanupDone) {
+        root.orphanCleanupDone = true
+        if (!hubCleanupProc.running) {
+          hubCleanupProc.spawnAfter = false
+          hubCleanupProc.command = Model.buildHubCleanupCommand()
+          hubCleanupProc.running = true
+        }
+      }
+      return
+    }
     root.startHub()
   }
 
@@ -269,6 +284,12 @@ Item {
       root.stopHubInternal()
     }
     root.device = cam.captureNode
+    if (/v4l2loopback/i.test(String(cam.captureNode))) {
+      // Guard: the pipeline must never select a loopback as the active
+      // camera. If this ever fires, the journal shows who did it.
+      console.warn("[webcam] device set to loopback node:", cam.captureNode,
+          "name:", cam.name, "stack:", new Error().stack)
+    }
     root.modelName = cam.name || "Camera"
     root.permissionDenied = false
     root.devicePresent = false
@@ -524,6 +545,7 @@ Item {
     // start then fails with "Device or resource busy" and parks in error.
     // hubCleanupProc.onExited does the actual spawn.
     root.hubState = "starting"
+    hubCleanupProc.spawnAfter = true
     hubCleanupProc.command = Model.buildHubCleanupCommand()
     hubCleanupProc.running = true
     return true
@@ -571,16 +593,23 @@ Item {
     root.saveState()
   }
 
-  function toggleHub() {
-    if (root.hubActive()) {
-      root.hubEnabled = false
-      root.stopHub()
-      root.saveState()
-    } else {
+  // Single hub on/off entry point — persists the switch so the state file,
+  // the app UI and the hardware (webcam LED) stay in sync across restarts.
+  // IPC handlers must use this, not startHub/stopHub directly.
+  function setHubEnabled(flag) {
+    if (flag) {
       root.hubEnabled = true
       root.saveState()
-      root.startHub()
+      return root.startHub()
     }
+    root.hubEnabled = false
+    root.stopHub()
+    root.saveState()
+    return true
+  }
+
+  function toggleHub() {
+    setHubEnabled(!root.hubActive())
   }
 
   // Restart after a capture-mode change or device switch, once the new state
@@ -678,8 +707,7 @@ Item {
   function setPreviewActive(active) {
     var flag = Model.parseFlag(active)
     if (flag === null) return
-    if (flag) root.startHub()
-    else root.stopHub()
+    root.setHubEnabled(flag)
   }
 
   function getMirror() {
@@ -767,11 +795,8 @@ Item {
 
   function virtualCam(mode) {
     var m = String(mode === undefined || mode === null ? "" : mode).trim().toLowerCase()
-    if (m === "on") return root.startHub()
-    if (m === "off") {
-      root.stopHub()
-      return true
-    }
+    if (m === "on") return root.setHubEnabled(true)
+    if (m === "off") return root.setHubEnabled(false)
     root.toggleHub()
     return root.hubActive()
   }
@@ -1044,9 +1069,13 @@ Item {
   // processes that hold the loopback devices; phase 2 spawns the fresh hub.
   Process {
     id: hubCleanupProc
+    // When spawnAfter is set (the startHub path) the fresh hub spawns after
+    // the cleanup; the startup orphan cleanup leaves it unset so a disabled
+    // hub stays off.
+    property bool spawnAfter: false
     command: []
     stdout: StdioCollector { waitForEnd: true }
-    onExited: function(exitCode) { root.spawnHub() }
+    onExited: function(exitCode) { if (spawnAfter) root.spawnHub() }
   }
 
   Process {

@@ -82,7 +82,9 @@ PopupWindow {
   readonly property string hubStatusText: {
     if (root.hubState === "running") {
       var node = root.loopbackMain ? root.loopbackMain.node : ""
-      return node !== "" ? ("Running → " + node) : "Running"
+      // Say "virtual camera" explicitly — this is the loopback other apps
+      // import, not the selected input camera shown in the header.
+      return node !== "" ? ("Virtual camera running at " + node) : "Running"
     }
     if (root.hubState === "starting") return "Starting…"
     if (root.hubState === "error") return "Failed — camera busy, unplugged, or loopback gone"
@@ -102,7 +104,32 @@ PopupWindow {
     if (root.hubState === "off") return "off"
     return "running"
   }
-  onViewfinderStateChanged: root.syncViewfinderCamera()
+  // Viewfinder capture gate: the camera only runs while the popup is visible
+  // and the hub has been streaming for ~2s. Opening the capture device
+  // mid-startup, or keeping it open with the popup closed, trips
+  // QtMultimedia's USERPTR fallback race on v4l2loopback (the driver has no
+  // USERPTR support, so the request always fails) — that race segfaults the
+  // QSGRenderThread in Mesa roughly one time in three.
+  property bool viewfinderSettled: false
+
+  Timer {
+    id: settleTimer
+    interval: 2000
+    onTriggered: {
+      root.viewfinderSettled = true
+      root.syncViewfinderCamera()
+    }
+  }
+
+  onViewfinderStateChanged: {
+    if (viewfinderState === "running") {
+      if (!viewfinderSettled) settleTimer.restart()
+    } else {
+      viewfinderSettled = false
+      settleTimer.stop()
+    }
+    root.syncViewfinderCamera()
+  }
 
   readonly property var settingsSections: Model.settingsLayout(root.controls, {
     fovAvailable: root.fovAvailable,
@@ -212,22 +239,27 @@ PopupWindow {
   function syncViewfinderCamera() {
     var want = root.loopbackHelper ? root.loopbackHelper.node : ""
     var devs = mediaDevices.videoInputs
-    var matched = false
+    var shouldActivate = false
     if (want && devs) {
       for (var i = 0; i < devs.length; i++) {
-        if (String(devs[i].id) === want) {
-          viewfinderCamera.cameraDevice = devs[i]
-          matched = true
-          break
-        }
+        if (String(devs[i].id) !== want) continue
+        // Assign only when activating: assigning a QCameraDevice on an
+        // inactive camera makes QtMultimedia open and hold the device fd
+        // (seen as quickshell holding the helper with the popup closed
+        // and the hub off).
+        shouldActivate = root.viewfinderState === "running"
+            && root.open && root.viewfinderSettled
+        if (shouldActivate) viewfinderCamera.cameraDevice = devs[i]
+        break
       }
     }
-    viewfinderCamera.active = matched && root.viewfinderState === "running"
+    viewfinderCamera.active = shouldActivate
   }
 
   Component.onCompleted: root.syncViewfinderCamera()
 
   onOpenChanged: {
+    root.syncViewfinderCamera()
     if (!bar) return
     if (open) bar.requestPopout(coordinatorKey)
     else if (bar.activePopout === coordinatorKey) bar.releasePopout(coordinatorKey)
